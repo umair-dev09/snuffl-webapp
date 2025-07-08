@@ -3,4 +3,3 @@ uvicorn==0.24.0
 crawl4ai==0.6.3
 groq==0.4.1
 python-dotenv==1.0.0
-httpx==0.25.2
