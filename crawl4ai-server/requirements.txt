@@ -3,5 +3,5 @@ uvicorn
 crawl4ai==0.6.3
 groq
 python-dotenv
-pydantic==2.5.0
+pydantic>=2.10
 httpx==0.25.2
