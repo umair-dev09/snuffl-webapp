@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from crawl4ai import WebCrawler
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 from groq import Groq
 import os
 import json
@@ -52,21 +52,35 @@ async def health_check():
 async def scrape_single_page(request: ScrapeRequest):
     """Scrape a single product page and extract structured data"""
     try:
-        # Initialize crawler
-        crawler = WebCrawler()
+        # Configure browser settings
+        browser_config = BrowserConfig(
+            browser_type="chromium",
+            headless=True,
+            verbose=False
+        )
         
-        # Crawl the page
-        result = crawler.run(url=request.url)
+        # Configure crawl settings
+        crawl_config = CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            word_count_threshold=10,
+            remove_overlay_elements=True,
+            wait_for_images=False,
+            process_iframes=False
+        )
+        
+        # Use async context manager for proper resource management
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            result = await crawler.arun(url=request.url, config=crawl_config)
         
         if not result.success:
             return ScrapeResponse(
                 url=request.url,
                 success=False,
-                error="Failed to crawl the page"
+                error=result.error_message or "Failed to crawl the page"
             )
         
         product_data = None
-        if request.extract_structured_data:
+        if request.extract_structured_data and result.markdown:
             # Use Groq to extract structured product data
             product_data = await extract_product_data_with_groq(result.markdown)
         
@@ -86,31 +100,51 @@ async def scrape_single_page(request: ScrapeRequest):
 
 @app.post("/bulk-scrape")
 async def scrape_multiple_pages(request: BulkScrapeRequest):
-    """Scrape multiple product pages in parallel"""
+    """Scrape multiple product pages using arun_many for optimal performance"""
     try:
-        # Limit concurrent requests to avoid overwhelming the server
-        semaphore = asyncio.Semaphore(5)
+        # Configure browser settings
+        browser_config = BrowserConfig(
+            browser_type="chromium",
+            headless=True,
+            verbose=False
+        )
         
-        async def scrape_with_semaphore(url: str):
-            async with semaphore:
-                scrape_request = ScrapeRequest(url=url, extract_structured_data=request.extract_structured_data)
-                return await scrape_single_page(scrape_request)
+        # Configure crawl settings
+        crawl_config = CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            word_count_threshold=10,
+            remove_overlay_elements=True,
+            wait_for_images=False,
+            process_iframes=False
+        )
         
-        # Execute all scraping tasks concurrently
-        tasks = [scrape_with_semaphore(url) for url in request.urls]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Use async context manager and arun_many for efficient bulk crawling
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            results = await crawler.arun_many(urls=request.urls, config=crawl_config)
         
-        # Handle any exceptions that occurred
+        # Process results and extract product data if requested
         processed_results = []
         for i, result in enumerate(results):
-            if isinstance(result, Exception):
+            url = request.urls[i]
+            
+            if result.success:
+                product_data = None
+                if request.extract_structured_data and result.markdown:
+                    # Use Groq to extract structured product data
+                    product_data = await extract_product_data_with_groq(result.markdown)
+                
                 processed_results.append(ScrapeResponse(
-                    url=request.urls[i],
-                    success=False,
-                    error=str(result)
+                    url=url,
+                    success=True,
+                    product_data=product_data,
+                    raw_content=result.markdown[:1000] if result.markdown else None
                 ))
             else:
-                processed_results.append(result)
+                processed_results.append(ScrapeResponse(
+                    url=url,
+                    success=False,
+                    error=result.error_message or "Failed to crawl the page"
+                ))
         
         successful_scrapes = sum(1 for r in processed_results if r.success)
         

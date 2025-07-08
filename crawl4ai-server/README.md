@@ -1,13 +1,14 @@
-# Snuffl Crawl4AI Server
+# Snuffl Crawl4AI Server (v0.6.3)
 
-A FastAPI-based web scraping service using Crawl4AI and Groq's Llama model for intelligent product data extraction.
+A FastAPI-based web scraping service using Crawl4AI v0.6.3 and Groq's Llama model for intelligent product data extraction.
 
 ## Features
 
-- **Single Page Scraping**: Scrape individual product pages
-- **Bulk Scraping**: Process multiple URLs concurrently
+- **Modern Async API**: Uses Crawl4AI's new AsyncWebCrawler with proper async context management
+- **Efficient Bulk Processing**: Leverages `arun_many()` for optimized concurrent crawling
+- **Smart Configuration**: Separate BrowserConfig and CrawlerRunConfig for modular setup
 - **AI-Powered Extraction**: Uses Groq's Llama 3.1 model for structured data extraction
-- **Product Data Structure**: Extracts name, price, rating, images, and more
+- **Resource Management**: Automatic cleanup and memory-conscious processing
 - **Error Handling**: Robust error handling and response formatting
 
 ## API Endpoints

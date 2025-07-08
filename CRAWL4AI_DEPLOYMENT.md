@@ -1,6 +1,15 @@
-# Crawl4AI Server Deployment Guide
+# Crawl4AI Server Deployment Guide (v0.6.3)
 
-## Step-by-Step Render Deployment
+## Updated for Crawl4AI 0.6.3
+
+This guide covers deploying the updated Crawl4AI server that uses the new AsyncWebCrawler API with proper async context management and CrawlerRunConfig.
+
+### Key Changes in v0.6.3:
+- Uses `AsyncWebCrawler` with async context manager (`async with`)
+- Implements `BrowserConfig` for browser settings
+- Uses `CrawlerRunConfig` for crawl-specific settings
+- Leverages `arun_many()` for efficient bulk crawling
+- Improved resource management and error handling
 
 ### 1. Get Groq API Key
 1. Visit https://console.groq.com/keys
