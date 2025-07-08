@@ -1,15 +1,58 @@
 # Crawl4AI Server Deployment Guide (v0.6.3)
 
-## Updated for Crawl4AI 0.6.3
+## Updated for Crawl4AI 0.6.3 + Playwright Fix
 
-This guide covers deploying the updated Crawl4AI server that uses the new AsyncWebCrawler API with proper async context management and CrawlerRunConfig.
+This guide covers deploying the updated Crawl4AI server that uses the new AsyncWebCrawler API with proper Playwright browser installation on Render.
 
 ### Key Changes in v0.6.3:
 - Uses `AsyncWebCrawler` with async context manager (`async with`)
 - Implements `BrowserConfig` for browser settings
 - Uses `CrawlerRunConfig` for crawl-specific settings
 - Leverages `arun_many()` for efficient bulk crawling
-- Improved resource management and error handling
+- **Fixed Playwright browser installation on Render**
+
+## Critical Fix: Playwright Browsers
+
+The main issue you encountered was that Playwright browsers weren't installed on Render. This is now fixed with:
+1. Updated `render.yaml` with proper build commands
+2. Added Playwright installation steps
+3. Set required environment variables
+
+## Quick Fix for Existing Deployment
+
+If you already have a Render service deployed, you need to:
+
+1. **Update your repository** with the new files:
+   - Updated `requirements.txt` (includes Playwright)
+   - Updated `render.yaml` (with browser installation)
+   - New `Dockerfile` (alternative deployment method)
+
+2. **Redeploy on Render**:
+   - Go to your Render dashboard
+   - Find your `snuffl-crawl4ai-server` service
+   - Click "Manual Deploy" → "Deploy latest commit"
+   - Wait for the build to complete (this will take longer due to browser installation)
+
+3. **Monitor the build logs** to ensure:
+   - `pip install -r requirements.txt` succeeds
+   - `playwright install chromium` succeeds
+   - `playwright install-deps chromium` succeeds
+
+## Alternative: Docker Deployment
+
+If the native Python deployment still has issues, use Docker:
+
+1. **Update Render Service**:
+   - Change "Environment" from "Python" to "Docker"
+   - Set "Dockerfile Path" to `Dockerfile`
+   - Keep the same environment variables
+
+2. **Docker build will**:
+   - Install system dependencies
+   - Install Python packages
+   - Install Playwright browsers automatically
+
+## Step-by-Step Render Deployment
 
 ### 1. Get Groq API Key
 1. Visit https://console.groq.com/keys
