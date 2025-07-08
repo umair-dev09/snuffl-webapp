@@ -1,6 +1,11 @@
 # Use Python 3.11 slim image
 FROM python:3.11-slim
 
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV DEBIAN_FRONTEND=noninteractive
+
 # Set working directory
 WORKDIR /app
 
@@ -22,6 +27,15 @@ RUN apt-get update && apt-get install -y \
     libxdamage1 \
     libxrandr2 \
     xdg-utils \
+    libxss1 \
+    libgconf-2-4 \
+    libxrandr2 \
+    libasound2 \
+    libpangocairo-1.0-0 \
+    libatk1.0-0 \
+    libcairo-gobject2 \
+    libgtk-3-0 \
+    libgdk-pixbuf2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
@@ -30,16 +44,15 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers
-RUN playwright install chromium
-RUN playwright install-deps chromium
+# Install Playwright browsers and dependencies
+RUN python -m playwright install chromium
+RUN python -m playwright install-deps chromium
+
+# Verify Playwright installation
+RUN python -c "from playwright.sync_api import sync_playwright; p = sync_playwright(); browser = p.start().chromium.launch(headless=True); browser.close(); print('✅ Playwright verification successful')"
 
 # Copy application code
 COPY . .
-
-# Set environment variables
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-ENV PORT=8000
 
 # Expose port
 EXPOSE 8000

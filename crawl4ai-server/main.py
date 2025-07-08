@@ -7,8 +7,15 @@ import json
 import asyncio
 from typing import List, Optional
 from dotenv import load_dotenv
+from install_playwright import ensure_playwright_installed
 
 load_dotenv()
+
+# Ensure Playwright is installed on startup
+print("🔧 Checking Playwright installation...")
+playwright_ready = ensure_playwright_installed()
+if not playwright_ready:
+    print("❌ Warning: Playwright installation failed. Browser functionality may not work.")
 
 app = FastAPI(title="Snuffl Crawl4AI Server", version="1.0.0")
 
