@@ -1,0 +1,3 @@
+# Railway will auto-detect this as a Python app
+# This file can be deleted if Railway auto-detection works
+web: uvicorn main:app --host 0.0.0.0 --port $PORT
