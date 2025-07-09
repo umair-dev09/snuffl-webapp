@@ -1,0 +1,14 @@
+# Railway Configuration
+nixpacks.toml
+
+[build]
+# Build command
+cmd = "pip install -r requirements.txt && python install_playwright.py"
+
+[start]
+# Start command
+cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+
+[variables]
+# Environment variables
+PYTHON_VERSION = "3.11"

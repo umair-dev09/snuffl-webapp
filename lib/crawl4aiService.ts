@@ -33,6 +33,9 @@ export class Crawl4AIService {
 
   constructor() {
     this.baseUrl = process.env.CRAWL4AI_ENDPOINT || 'http://localhost:8000'
+    // Remove trailing slash if present
+    this.baseUrl = this.baseUrl.replace(/\/$/, '')
+    console.log(`🔧 Crawl4AI service initialized with baseUrl: ${this.baseUrl}`)
   }
 
   async healthCheck(): Promise<{ status: string }> {
@@ -58,7 +61,9 @@ export class Crawl4AIService {
         body: JSON.stringify({
           url,
           extract_structured_data: extractStructuredData
-        })
+        }),
+        // Add timeout for single page scraping
+        signal: AbortSignal.timeout(60000) // 1 minute timeout
       })
 
       if (!response.ok) {
@@ -83,6 +88,12 @@ export class Crawl4AIService {
     try {
       console.log(`🚀 Starting bulk scrape of ${urls.length} URLs...`)
       
+      // If we have many URLs, process in smaller batches to avoid timeout
+      if (urls.length > 3) {
+        console.log(`📦 Processing in batches due to ${urls.length} URLs...`)
+        return await this.scrapeInBatches(urls, extractStructuredData)
+      }
+      
       const response = await fetch(`${this.baseUrl}/bulk-scrape`, {
         method: 'POST',
         headers: {
@@ -91,7 +102,9 @@ export class Crawl4AIService {
         body: JSON.stringify({
           urls,
           extract_structured_data: extractStructuredData
-        })
+        }),
+        // Increase timeout for bulk operations
+        signal: AbortSignal.timeout(300000) // 5 minutes timeout
       })
 
       if (!response.ok) {
@@ -108,8 +121,90 @@ export class Crawl4AIService {
     }
   }
 
+  /**
+   * Process URLs in smaller batches to avoid timeout issues
+   */
+  async scrapeInBatches(urls: string[], extractStructuredData: boolean = true, batchSize: number = 3): Promise<BulkScrapeResponse> {
+    console.log(`📦 Processing ${urls.length} URLs in batches of ${batchSize}...`)
+    
+    const allResults: any[] = []
+    let totalSuccessful = 0
+    
+    // Split URLs into batches
+    for (let i = 0; i < urls.length; i += batchSize) {
+      const batch = urls.slice(i, i + batchSize)
+      console.log(`📦 Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(urls.length / batchSize)} (${batch.length} URLs)...`)
+      
+      try {
+        const response = await fetch(`${this.baseUrl}/bulk-scrape`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            urls: batch,
+            extract_structured_data: extractStructuredData
+          }),
+          // Shorter timeout for smaller batches
+          signal: AbortSignal.timeout(90000) // 1.5 minutes timeout per batch
+        })
+
+        if (!response.ok) {
+          console.error(`❌ Batch ${Math.floor(i / batchSize) + 1} failed: HTTP ${response.status}`)
+          // Add failed results for this batch
+          batch.forEach(url => {
+            allResults.push({
+              url,
+              success: false,
+              error: `HTTP ${response.status}`,
+              raw_content: null,
+              product_data: null
+            })
+          })
+          continue
+        }
+
+        const batchResult: BulkScrapeResponse = await response.json()
+        totalSuccessful += batchResult.successful_scrapes
+        allResults.push(...batchResult.results)
+        
+        console.log(`✅ Batch ${Math.floor(i / batchSize) + 1} completed: ${batchResult.successful_scrapes}/${batch.length} successful`)
+        
+        // Add a delay between batches to reduce server load
+        if (i + batchSize < urls.length) {
+          console.log(`⏳ Waiting 2 seconds before next batch...`)
+          await new Promise(resolve => setTimeout(resolve, 2000))
+        }
+        
+      } catch (error) {
+        console.error(`❌ Batch ${Math.floor(i / batchSize) + 1} error:`, error)
+        // Add failed results for this batch
+        batch.forEach(url => {
+          allResults.push({
+            url,
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error',
+            raw_content: null,
+            product_data: null
+          })
+        })
+      }
+    }
+    
+    console.log(`🎯 Batch processing complete: ${totalSuccessful}/${urls.length} total successful`)
+    
+    return {
+      total_urls: urls.length,
+      successful_scrapes: totalSuccessful,
+      failed_scrapes: urls.length - totalSuccessful,
+      results: allResults
+    }
+  }
+
   async scrapeSerperProducts(serperProducts: any[]): Promise<ProductData[]> {
     try {
+      console.log(`🚀 Starting scrapeSerperProducts with ${serperProducts.length} products`)
+      
       // Extract URLs from Serper products
       const urls = serperProducts.map(product => product.link).filter(Boolean)
       
@@ -119,39 +214,48 @@ export class Crawl4AIService {
       }
 
       console.log(`🔗 Extracted ${urls.length} URLs from Serper products`)
+      console.log(`🌐 Base URL: ${this.baseUrl}`)
       
       // Scrape all URLs
+      console.log(`📡 Calling scrapeMultiplePages...`)
       const bulkResult = await this.scrapeMultiplePages(urls, true)
+      console.log(`📊 Bulk result: ${bulkResult.successful_scrapes}/${bulkResult.total_urls} successful`)
       
       // Extract successful product data
       const productData: ProductData[] = []
       
       for (const result of bulkResult.results) {
-        if (result.success && result.product_data) {
+        if (result.success) {
           // Merge Serper data with scraped data for better accuracy
           const serperProduct = serperProducts.find(p => p.link === result.url)
           const mergedData: ProductData = {
-            ...result.product_data,
-            // Use Serper data as fallback if scraping didn't extract certain fields
-            name: result.product_data.name || serperProduct?.title,
-            price: result.product_data.price || serperProduct?.price,
-            rating: result.product_data.rating || serperProduct?.rating,
-            rating_count: result.product_data.rating_count || serperProduct?.ratingCount,
-            image_url: result.product_data.image_url || serperProduct?.imageUrl,
+            // Use scraped data first, then fallback to Serper data
+            name: result.product_data?.name || serperProduct?.title || 'Unknown Product',
+            price: result.product_data?.price || serperProduct?.price || 'Price not available',
+            rating: result.product_data?.rating || serperProduct?.rating || undefined,
+            rating_count: result.product_data?.rating_count || serperProduct?.ratingCount || undefined,
+            image_url: result.product_data?.image_url || serperProduct?.imageUrl || undefined,
+            brand: result.product_data?.brand || undefined,
+            description: result.product_data?.description || undefined,
+            availability: result.product_data?.availability || 'Available',
+            original_price: result.product_data?.original_price || undefined,
+            discount: result.product_data?.discount || undefined,
+            specifications: result.product_data?.specifications || undefined
           }
           
           productData.push(mergedData)
+          console.log(`✅ Processed product: ${mergedData.name} - ${mergedData.price}`)
         } else {
-          console.log(`⚠️ Failed to scrape product: ${result.url}`)
+          console.log(`⚠️ Failed to scrape product: ${result.url} - ${result.error}`)
         }
       }
 
-      console.log(`📦 Successfully extracted data for ${productData.length} products`)
+      console.log(`🎯 Final result: Successfully extracted data for ${productData.length} products`)
       return productData
       
     } catch (error) {
-      console.error('❌ Error scraping Serper products:', error)
-      return []
+      console.error('❌ Error in scrapeSerperProducts:', error)
+      throw error // Re-throw instead of returning empty array to see the actual error
     }
   }
 }

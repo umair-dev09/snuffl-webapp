@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
     if (!existingProducts || existingProducts.length < 20) {
       console.log(`🚀 Not enough products in database. Fetching from Serper API...`)
       
-      const serperProducts = await fetchProductsFromSerper(query, 30)
+      const serperProducts = await fetchProductsFromSerper(query, 12, prompt)
       console.log(`🛒 Serper API returned ${serperProducts.length} products`)
 
       if (serperProducts.length > 0) {
@@ -85,8 +85,11 @@ export async function POST(req: NextRequest) {
 
   } catch (error) {
     console.error('❌ Error in search API:', error)
+    console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace')
+    console.error('❌ Error message:', error instanceof Error ? error.message : String(error))
     return NextResponse.json({ 
-      error: 'Internal server error' 
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : String(error)
     }, { status: 500 })
   }
 }
