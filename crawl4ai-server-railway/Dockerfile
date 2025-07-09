@@ -15,17 +15,17 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies
+# Install Python dependencies (this will install the correct playwright version)
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
-# Install Playwright browsers
-RUN python -c "import playwright; playwright.install()"
+# Install Playwright browsers (use the version installed by crawl4ai)
+RUN python -m playwright install chromium
 
-# Install Playwright system dependencies
-RUN playwright install-deps
+# Install Playwright system dependencies for chromium only
+RUN python -m playwright install-deps chromium
 
 # Expose port
 EXPOSE 8000

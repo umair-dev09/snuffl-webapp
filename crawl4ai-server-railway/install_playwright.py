@@ -7,19 +7,18 @@ def ensure_playwright_installed():
     try:
         print("🔧 Installing Playwright browsers...")
         
-        # Install Playwright browsers
+        # Install only chromium browser (faster and smaller)
         result = subprocess.run([
-            sys.executable, "-c", 
-            "import playwright; playwright.install()"
+            sys.executable, "-m", "playwright", "install", "chromium"
         ], capture_output=True, text=True, timeout=300)
         
         if result.returncode == 0:
-            print("✅ Playwright browsers installed successfully")
+            print("✅ Playwright chromium browser installed successfully")
             
-            # Install system dependencies
+            # Install system dependencies for chromium only
             print("🔧 Installing Playwright system dependencies...")
             deps_result = subprocess.run([
-                "playwright", "install-deps"
+                sys.executable, "-m", "playwright", "install-deps", "chromium"
             ], capture_output=True, text=True, timeout=300)
             
             if deps_result.returncode == 0:
