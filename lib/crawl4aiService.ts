@@ -124,16 +124,23 @@ export class Crawl4AIService {
   /**
    * Process URLs in smaller batches to avoid timeout issues
    */
-  async scrapeInBatches(urls: string[], extractStructuredData: boolean = true, batchSize: number = 3): Promise<BulkScrapeResponse> {
+  async scrapeInBatches(urls: string[], extractStructuredData: boolean = true, batchSize: number = 6): Promise<BulkScrapeResponse> {
     console.log(`📦 Processing ${urls.length} URLs in batches of ${batchSize}...`)
     
     const allResults: any[] = []
     let totalSuccessful = 0
     
-    // Split URLs into batches
+    // For Railway optimization: Process batches in parallel when possible
+    const batches = []
     for (let i = 0; i < urls.length; i += batchSize) {
-      const batch = urls.slice(i, i + batchSize)
-      console.log(`📦 Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(urls.length / batchSize)} (${batch.length} URLs)...`)
+      batches.push(urls.slice(i, i + batchSize))
+    }
+    
+    console.log(`� Processing ${batches.length} batches in parallel for faster execution...`)
+    
+    // Process all batches in parallel (Railway can handle this better than Render)
+    const batchPromises = batches.map(async (batch, index) => {
+      console.log(`📦 Starting batch ${index + 1}/${batches.length} (${batch.length} URLs)...`)
       
       try {
         const response = await fetch(`${this.baseUrl}/bulk-scrape`, {
@@ -145,53 +152,60 @@ export class Crawl4AIService {
             urls: batch,
             extract_structured_data: extractStructuredData
           }),
-          // Shorter timeout for smaller batches
-          signal: AbortSignal.timeout(90000) // 1.5 minutes timeout per batch
+          // Aggressive timeout for Railway (it's faster and more stable)
+          signal: AbortSignal.timeout(60000) // 1 minute timeout per batch
         })
 
         if (!response.ok) {
-          console.error(`❌ Batch ${Math.floor(i / batchSize) + 1} failed: HTTP ${response.status}`)
-          // Add failed results for this batch
-          batch.forEach(url => {
-            allResults.push({
+          console.error(`❌ Batch ${index + 1} failed: HTTP ${response.status}`)
+          return {
+            batchIndex: index + 1,
+            results: batch.map(url => ({
               url,
               success: false,
               error: `HTTP ${response.status}`,
               raw_content: null,
               product_data: null
-            })
-          })
-          continue
+            })),
+            successful: 0
+          }
         }
 
         const batchResult: BulkScrapeResponse = await response.json()
-        totalSuccessful += batchResult.successful_scrapes
-        allResults.push(...batchResult.results)
+        console.log(`✅ Batch ${index + 1} completed: ${batchResult.successful_scrapes}/${batch.length} successful`)
         
-        console.log(`✅ Batch ${Math.floor(i / batchSize) + 1} completed: ${batchResult.successful_scrapes}/${batch.length} successful`)
-        
-        // Add a delay between batches to reduce server load
-        if (i + batchSize < urls.length) {
-          console.log(`⏳ Waiting 2 seconds before next batch...`)
-          await new Promise(resolve => setTimeout(resolve, 2000))
+        return {
+          batchIndex: index + 1,
+          results: batchResult.results,
+          successful: batchResult.successful_scrapes
         }
         
       } catch (error) {
-        console.error(`❌ Batch ${Math.floor(i / batchSize) + 1} error:`, error)
-        // Add failed results for this batch
-        batch.forEach(url => {
-          allResults.push({
+        console.error(`❌ Batch ${index + 1} error:`, error)
+        return {
+          batchIndex: index + 1,
+          results: batch.map(url => ({
             url,
             success: false,
             error: error instanceof Error ? error.message : 'Unknown error',
             raw_content: null,
             product_data: null
-          })
-        })
+          })),
+          successful: 0
+        }
       }
+    })
+    
+    // Wait for all batches to complete
+    const batchResults = await Promise.all(batchPromises)
+    
+    // Combine results
+    for (const batchResult of batchResults) {
+      totalSuccessful += batchResult.successful
+      allResults.push(...batchResult.results)
     }
     
-    console.log(`🎯 Batch processing complete: ${totalSuccessful}/${urls.length} total successful`)
+    console.log(`🎯 Parallel batch processing complete: ${totalSuccessful}/${urls.length} total successful`)
     
     return {
       total_urls: urls.length,

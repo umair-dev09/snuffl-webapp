@@ -59,20 +59,26 @@ async def health_check():
 async def scrape_single_page(request: ScrapeRequest):
     """Scrape a single product page and extract structured data"""
     try:
-        # Configure browser settings
+        # Configure browser settings for maximum speed
         browser_config = BrowserConfig(
             browser_type="chromium",
             headless=True,
             verbose=False
         )
         
-        # Configure crawl settings
+        # Configure crawl settings for speed optimization
         crawl_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            word_count_threshold=10,
+            word_count_threshold=5,  # Reduced from 10
             remove_overlay_elements=True,
             wait_for_images=False,
-            process_iframes=False
+            process_iframes=False,
+            load_timeout=10000,  # 10 seconds max per page
+            html_timeout=8000,   # 8 seconds for HTML parsing
+            screenshot=False,    # Disable screenshots for speed
+            pdf=False,          # Disable PDF for speed
+            css_selector=None,  # No CSS filtering for speed
+            js_code=None        # No JavaScript execution
         )
         
         # Use async context manager for proper resource management
@@ -109,20 +115,26 @@ async def scrape_single_page(request: ScrapeRequest):
 async def scrape_multiple_pages(request: BulkScrapeRequest):
     """Scrape multiple product pages using arun_many for optimal performance"""
     try:
-        # Configure browser settings
+        # Configure browser settings for maximum speed
         browser_config = BrowserConfig(
             browser_type="chromium",
             headless=True,
             verbose=False
         )
         
-        # Configure crawl settings
+        # Configure crawl settings for speed optimization
         crawl_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            word_count_threshold=10,
+            word_count_threshold=5,  # Reduced from 10
             remove_overlay_elements=True,
             wait_for_images=False,
-            process_iframes=False
+            process_iframes=False,
+            load_timeout=10000,  # 10 seconds max per page
+            html_timeout=8000,   # 8 seconds for HTML parsing
+            screenshot=False,    # Disable screenshots for speed
+            pdf=False,          # Disable PDF for speed
+            css_selector=None,  # No CSS filtering for speed
+            js_code=None        # No JavaScript execution
         )
         
         # Use async context manager and arun_many for efficient bulk crawling
@@ -166,45 +178,26 @@ async def scrape_multiple_pages(request: BulkScrapeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 async def extract_product_data_with_groq(content: str) -> ProductData:
-    """Extract structured product data using Groq's Llama model"""
+    """Extract structured product data using Groq's Llama model - Optimized for speed"""
     try:
+        # Truncate content more aggressively for faster processing
+        truncated_content = content[:2000]  # Reduced from 3000
+        
         prompt = f"""
-        Extract product information from the following e-commerce page content and return ONLY a valid JSON object with these exact fields:
-
-        {{
-            "name": "product name",
-            "price": "current price with currency symbol",
-            "original_price": "original price if there's a discount",
-            "discount": "discount percentage or amount",
-            "rating": "rating as number (e.g., 4.5)",
-            "rating_count": "number of ratings as integer",
-            "image_url": "main product image URL",
-            "description": "brief product description",
-            "brand": "brand name",
-            "availability": "in stock/out of stock status",
-            "specifications": {{"key": "value"}}
-        }}
-
-        Rules:
-        - Return ONLY the JSON object, no additional text
-        - Use null for missing information
-        - Extract price as string with currency symbol (₹, $, etc.)
-        - Rating should be a number between 0-5
-        - Keep description under 200 characters
-        - For specifications, include key technical details as key-value pairs
-
-        Content to extract from:
-        {content[:3000]}
+        Extract ONLY these fields from the e-commerce page as JSON:
+        {{"name": "product name", "price": "price with currency", "rating": number, "brand": "brand"}}
+        
+        Rules: Return ONLY JSON, no extra text. Use null for missing data.
+        
+        Content: {truncated_content}
         """
 
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            messages=[{
-                "role": "user",
-                "content": prompt
-            }],
-            max_tokens=800,
-            temperature=0.1
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000,    # Reduced from 800 for faster response
+            temperature=0,     # Reduced from 0.1 for consistency
+            top_p=0.1         # Added for faster inference
         )
         
         # Parse the JSON response

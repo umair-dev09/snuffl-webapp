@@ -2,12 +2,12 @@
 const testUrls = [
   'https://www.amazon.in/dp/B08N5WRWNW',
   'https://www.flipkart.com/apple-iphone-13/p/itm6ac6485515ae4',
-  'https://www.amazon.com/dp/B08N5WRWNW'
+  'https://google.com/shopping/product/13237872005925917631?gl=in'
 ];
 
 const endpoints = {
   render: 'https://snuffl-crawl4ai-docker.onrender.com',
-  railway: 'https://your-railway-app.railway.app' // Update this after deployment
+  railway: 'https://snuffl-webapp-production.up.railway.app'
 };
 
 async function testEndpoint(name, baseUrl, testType = 'bulk') {
