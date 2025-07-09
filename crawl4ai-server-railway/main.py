@@ -72,13 +72,7 @@ async def scrape_single_page(request: ScrapeRequest):
             word_count_threshold=5,  # Reduced from 10
             remove_overlay_elements=True,
             wait_for_images=False,
-            process_iframes=False,
-            load_timeout=10000,  # 10 seconds max per page
-            html_timeout=8000,   # 8 seconds for HTML parsing
-            screenshot=False,    # Disable screenshots for speed
-            pdf=False,          # Disable PDF for speed
-            css_selector=None,  # No CSS filtering for speed
-            js_code=None        # No JavaScript execution
+            process_iframes=False
         )
         
         # Use async context manager for proper resource management
@@ -128,13 +122,7 @@ async def scrape_multiple_pages(request: BulkScrapeRequest):
             word_count_threshold=5,  # Reduced from 10
             remove_overlay_elements=True,
             wait_for_images=False,
-            process_iframes=False,
-            load_timeout=10000,  # 10 seconds max per page
-            html_timeout=8000,   # 8 seconds for HTML parsing
-            screenshot=False,    # Disable screenshots for speed
-            pdf=False,          # Disable PDF for speed
-            css_selector=None,  # No CSS filtering for speed
-            js_code=None        # No JavaScript execution
+            process_iframes=False
         )
         
         # Use async context manager and arun_many for efficient bulk crawling
