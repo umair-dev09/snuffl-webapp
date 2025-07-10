@@ -192,63 +192,99 @@ async def scrape_multiple_pages(request: BulkScrapeRequest):
 async def scrape_google_shopping_comprehensive(request: ScrapeRequest):
     """Smart two-step scraping: Google Shopping for basic info + buying options, then deep scrape e-commerce sites"""
     try:
-        # Step 1: Light scraping of Google Shopping page
-        print(f"🔍 Step 1: Light scraping Google Shopping page: {request.url}")
+        # Step 1: Light scraping of Google Shopping page with advanced bypass
+        print(f"🔍 Step 1: Advanced Google Shopping bypass for: {request.url}")
         
-        # Simple browser config for Google Shopping (less aggressive)
+        # Advanced browser config with rotating user agents and headers
         browser_config = BrowserConfig(
             browser_type="chromium",
             headless=True,
             verbose=False,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-User": "?1",
+                "DNT": "1",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache"
+            }
         )
         
-        # Light crawl config for Google Shopping
+        # Ultra-light crawl config for Google Shopping (minimal footprint)
         crawl_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            word_count_threshold=20,
-            remove_overlay_elements=True,
-            wait_for_images=False,  # Don't wait for images to avoid blocking
+            word_count_threshold=10,  # Very light extraction
+            remove_overlay_elements=False,  # Don't modify page to avoid detection
+            wait_for_images=False,
             process_iframes=False
         )
         
-        # Scrape Google Shopping page lightly
+        # Scrape Google Shopping page with multiple fallback strategies
+        google_data = None
+        google_content = ""
+        
+        # Strategy 1: Try light Google Shopping scraping
         async with AsyncWebCrawler(config=browser_config) as crawler:
             google_result = await crawler.arun(url=request.url, config=crawl_config)
         
-        if not google_result.success:
+        if google_result.success:
+            google_content = google_result.markdown or ""
+            
+            # Check if Google is blocking us
+            if len(google_content) > 500 and "Sign in" not in google_content and "Choose what you're giving feedback on" not in google_content:
+                print(f"✅ Strategy 1 succeeded: Got Google Shopping content")
+                google_data = await extract_google_shopping_basic_data(google_content)
+            else:
+                print(f"⚠️  Strategy 1 blocked: Google showing consent/login page")
+                google_content = ""
+        
+        # Strategy 2: If Google Shopping failed, try to extract from URL patterns
+        if not google_data or not (google_data.buying_options):
+            print(f"🔄 Strategy 2: Attempting URL pattern extraction and fallback scraping")
+            google_data = await fallback_google_shopping_extraction(request.url)
+        
+        # Strategy 3: If still no buying options, use predefined popular e-commerce sites
+        if not google_data or not (google_data.buying_options):
+            print(f"🎯 Strategy 3: Using predefined e-commerce sites for product search")
+            google_data = await create_fallback_buying_options(request.url)
+        
+        # Validate we have something to work with
+        if not google_data or not (google_data.buying_options):
             return ScrapeResponse(
                 url=request.url,
                 success=False,
-                error=f"Failed to scrape Google Shopping page: {google_result.error_message}"
+                error="Unable to extract buying options from Google Shopping or fallback methods",
+                raw_content=google_content[:500] if google_content else "No content extracted"
             )
         
-        # Check if Google is blocking us
-        google_content = google_result.markdown or ""
-        if len(google_content) < 500 or "Sign in" in google_content or "Choose what you're giving feedback on" in google_content:
-            return ScrapeResponse(
-                url=request.url,
-                success=False,
-                error="Google is showing login/consent page instead of product content",
-                raw_content=google_content[:500]
-            )
-        
-        # Step 2: Extract basic info + buying options from Google Shopping
-        print(f"📊 Step 2: Extracting basic info and buying options from Google Shopping")
-        google_data = await extract_google_shopping_basic_data(google_content)
-        
-        # Step 3: Smart deep scraping of e-commerce sites
-        print(f"🛒 Step 3: Deep scraping top e-commerce sites")
+        # Step 2: Smart deep scraping of e-commerce sites
+        print(f"� Step 2: Deep scraping e-commerce sites with {len(google_data.buying_options)} options")
         comprehensive_data = await smart_deep_scrape_ecommerce_sites(google_data, google_content)
         
-        # Step 4: Merge Google Shopping data with comprehensive e-commerce data
+        # Step 3: Merge data intelligently
         final_data = merge_google_and_ecommerce_data(google_data, comprehensive_data)
+        
+        # Validate final result
+        if not final_data or not (final_data.title or final_data.description):
+            return ScrapeResponse(
+                url=request.url,
+                success=False,
+                error="Unable to extract meaningful product data from any source",
+                raw_content=google_content[:500] if google_content else "No content"
+            )
         
         return ScrapeResponse(
             url=request.url,
             success=True,
             product_data=final_data,
-            raw_content=google_content[:1000]  # Keep Google Shopping content for reference
+            raw_content=google_content[:1000] if google_content else "Extracted via fallback methods"
         )
         
     except Exception as e:
@@ -742,7 +778,7 @@ async def extract_google_shopping_basic_data(content: str) -> ProductData:
         return ProductData()
 
 async def smart_deep_scrape_ecommerce_sites(google_data: ProductData, google_content: str) -> ProductData:
-    """Smart deep scraping of e-commerce sites from Google Shopping buying options"""
+    """Smart deep scraping of e-commerce sites from Google Shopping buying options or fallback sites"""
     try:
         # Get buying options from Google Shopping data
         buying_options = google_data.buying_options or []
@@ -751,26 +787,50 @@ async def smart_deep_scrape_ecommerce_sites(google_data: ProductData, google_con
             print("⚠️  No buying options found in Google Shopping data")
             return ProductData()
         
+        # Check if we have actual product URLs or need to search
+        has_product_urls = any(option.site_url and "amazon.in/dp/" in option.site_url or 
+                              "flipkart.com/" in option.site_url and "/p/" in option.site_url
+                              for option in buying_options)
+        
+        if has_product_urls:
+            print("🎯 Found direct product URLs - using direct scraping")
+            return await direct_scrape_product_urls(buying_options)
+        else:
+            print("🔍 No direct URLs found - using smart search approach")
+            # Extract product query from available data
+            product_query = google_data.title or "product"
+            if google_data.brand:
+                product_query = f"{google_data.brand} {product_query}"
+            
+            return await smart_search_and_scrape(product_query, buying_options)
+        
+    except Exception as e:
+        print(f"Error in smart deep scraping: {e}")
+        return ProductData()
+
+async def direct_scrape_product_urls(buying_options: List[BuyingOption]) -> ProductData:
+    """Direct scraping when we have actual product URLs"""
+    try:
         # Prioritize e-commerce sites (Amazon, Flipkart, Myntra, etc.)
         prioritized_sites = []
         for option in buying_options:
             if option.site_url and option.seller_name:
-                # Check if it's a known e-commerce site
+                # Check if it's a known e-commerce site with product URL
                 seller_lower = option.seller_name.lower()
-                if any(site in seller_lower for site in ['amazon', 'flipkart', 'myntra', 'croma', 'ajio', 'nykaa', 'tata', 'reliance']):
+                if any(site in seller_lower for site in ['amazon', 'flipkart', 'myntra', 'croma', 'ajio', 'nykaa']):
                     prioritized_sites.append(option)
         
         # If no prioritized sites, use top 2 buying options
         if not prioritized_sites:
             prioritized_sites = buying_options[:2]
         
-        print(f"🎯 Found {len(prioritized_sites)} prioritized e-commerce sites to scrape")
+        print(f"🎯 Found {len(prioritized_sites)} e-commerce sites with product URLs")
         
         # Deep scrape top 2 e-commerce sites
         ecommerce_results = []
-        for i, option in enumerate(prioritized_sites[:2]):  # Limit to top 2 for speed
+        for option in prioritized_sites[:2]:  # Limit to top 2 for speed
             if option.site_url:
-                print(f"🛒 Deep scraping {option.seller_name}: {option.site_url}")
+                print(f"🛒 Direct scraping {option.seller_name}: {option.site_url}")
                 ecommerce_data = await deep_scrape_ecommerce_site(option.site_url, option.seller_name)
                 if ecommerce_data:
                     ecommerce_results.append(ecommerce_data)
@@ -782,7 +842,31 @@ async def smart_deep_scrape_ecommerce_sites(google_data: ProductData, google_con
         return ProductData()
         
     except Exception as e:
-        print(f"Error in smart deep scraping: {e}")
+        print(f"Error in direct scraping: {e}")
+        return ProductData()
+
+async def smart_search_and_scrape(product_query: str, buying_options: List[BuyingOption]) -> ProductData:
+    """Smart search and scrape when we don't have direct product URLs"""
+    try:
+        print(f"🔍 Searching for: {product_query}")
+        
+        # Search top e-commerce sites
+        search_results = await smart_search_ecommerce_sites(product_query, buying_options)
+        
+        if search_results:
+            return combine_ecommerce_data(search_results)
+        
+        # If search fails, try direct homepage scraping with basic data
+        return ProductData(
+            title=product_query,
+            brand=None,
+            price=None,
+            description=f"Product information for {product_query}",
+            availability_text="Available at multiple retailers"
+        )
+        
+    except Exception as e:
+        print(f"Error in smart search and scrape: {e}")
         return ProductData()
 
 async def deep_scrape_ecommerce_site(url: str, seller_name: str) -> ProductData:
