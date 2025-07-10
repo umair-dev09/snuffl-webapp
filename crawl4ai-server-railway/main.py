@@ -190,12 +190,11 @@ async def scrape_multiple_pages(request: BulkScrapeRequest):
 
 @app.post("/scrape-google-shopping", response_model=ScrapeResponse)
 async def scrape_google_shopping_comprehensive(request: ScrapeRequest):
-    """Smart two-step scraping: Google Shopping for basic info + buying options, then deep scrape e-commerce sites"""
+    """🧠 SMART COMPREHENSIVE SCRAPING: Google Shopping + Auto E-commerce Detection + Deep Scraping"""
     try:
-        # Step 1: Google Shopping scraping (same as simple endpoint)
-        print(f"🔍 Step 1: Google Shopping scraping for: {request.url}")
+        print(f"� Starting smart comprehensive scraping for: {request.url}")
         
-        # Use same browser config as simple endpoint
+        # STEP 1: Get Google Shopping content (exact same as working simple endpoint)
         browser_config = BrowserConfig(
             browser_type="chromium",
             headless=True,
@@ -203,7 +202,6 @@ async def scrape_google_shopping_comprehensive(request: ScrapeRequest):
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         )
         
-        # Use same crawl config as simple endpoint
         crawl_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
             word_count_threshold=50,
@@ -212,74 +210,82 @@ async def scrape_google_shopping_comprehensive(request: ScrapeRequest):
             process_iframes=False
         )
         
-        # Scrape Google Shopping page with multiple fallback strategies
-        google_data = None
-        google_content = ""
-        
-        # Strategy 1: Try Google Shopping scraping (like the simple endpoint)
         async with AsyncWebCrawler(config=browser_config) as crawler:
-            google_result = await crawler.arun(url=request.url, config=crawl_config)
+            result = await crawler.arun(url=request.url, config=crawl_config)
         
-        if google_result.success:
-            google_content = google_result.markdown or ""
-            
-            # Check if we got meaningful content (same logic as simple endpoint)
-            if len(google_content) > 500 and "Sign in" not in google_content and "Choose what you're giving feedback on" not in google_content:
-                print(f"✅ Strategy 1 succeeded: Got Google Shopping content")
-                # Extract comprehensive data from Google Shopping page
-                google_data = await extract_comprehensive_product_data_with_groq(google_content)
-                
-                # If comprehensive extraction failed, fallback to simple extraction
-                if not google_data or not google_data.title:
-                    print(f"🔄 Comprehensive extraction failed, trying simple extraction")
-                    google_data = await extract_simple_product_data(google_content)
-            else:
-                print(f"⚠️  Strategy 1 blocked: Google showing consent/login page")
-                google_content = ""
+        if not result.success:
+            return ScrapeResponse(
+                url=request.url,
+                success=False,
+                error=result.error_message or "Failed to crawl Google Shopping page"
+            )
         
-        # Strategy 2: If Google Shopping failed completely, use fallback
-        if not google_data or not google_data.title:
-            print(f"🔄 Strategy 2: Google Shopping failed, using fallback")
-            google_data = await fallback_google_shopping_extraction(request.url)
+        content = result.markdown or ""
+        if len(content) < 500 or "Sign in" in content or "Choose what you're giving feedback on" in content:
+            return ScrapeResponse(
+                url=request.url,
+                success=False,
+                error="Google is showing login/consent page instead of product content",
+                raw_content=content[:500]
+            )
         
-        # Validate we have meaningful data (like simple endpoint)
+        print(f"✅ Successfully scraped Google Shopping content ({len(content)} chars)")
+        
+        # STEP 2: Smart extraction - try comprehensive first, fallback to simple
+        google_data = None
+        
+        # Try comprehensive extraction first
+        print(f"🔍 Attempting comprehensive extraction...")
+        google_data = await extract_comprehensive_product_data_with_groq(content)
+        
+        # If comprehensive failed or returned poor data, use simple extraction
+        if not google_data or not google_data.title or google_data.title == "Unknown Product from Google Shopping":
+            print(f"🔄 Comprehensive failed, using simple extraction...")
+            google_data = await extract_simple_product_data(content)
+        
         if not google_data or not google_data.title:
             return ScrapeResponse(
                 url=request.url,
                 success=False,
-                error="Unable to extract product data from Google Shopping page",
-                raw_content=google_content[:500] if google_content else "No content extracted"
+                error="Failed to extract product data from Google Shopping page",
+                raw_content=content[:500]
             )
         
-        # If we have good data from Google Shopping, let's try to enhance it
-        if google_data.title and google_data.title != "Unknown Product from Google Shopping":
-            # Try to extract buying options from the raw content for deeper scraping
-            buying_options_from_content = await extract_buying_options_from_content(google_content)
-            if buying_options_from_content:
-                google_data.buying_options = buying_options_from_content
+        print(f"✅ Extracted Google Shopping data: {google_data.title}")
+        
+        # STEP 3: Smart buying options extraction from raw content
+        buying_options = await extract_smart_buying_options(content)
+        if buying_options:
+            google_data.buying_options = buying_options
+            print(f"🛒 Found {len(buying_options)} buying options")
+        
+        # STEP 4: Smart deep scraping if we have good e-commerce URLs
+        final_data = google_data
+        if buying_options:
+            # Filter for actual e-commerce product URLs
+            product_urls = []
+            for option in buying_options:
+                if option.site_url and is_valid_product_url(option.site_url):
+                    product_urls.append(option)
             
-            # If we have actual product URLs, try deep scraping
-            if google_data.buying_options and any(option.site_url and ".com" in option.site_url for option in google_data.buying_options):
-                print(f"🛒 Step 2: Deep scraping e-commerce sites with {len(google_data.buying_options)} options")
-                comprehensive_data = await smart_deep_scrape_ecommerce_sites(google_data, google_content)
+            if product_urls:
+                print(f"🎯 Found {len(product_urls)} valid product URLs, starting deep scraping...")
+                enhanced_data = await smart_scrape_product_pages(product_urls[:2])  # Limit to 2 for speed
                 
-                # Merge data intelligently
-                final_data = merge_google_and_ecommerce_data(google_data, comprehensive_data)
-            else:
-                # Just use the Google Shopping data as final result
-                final_data = google_data
-        else:
-            # Use the basic Google Shopping data
-            final_data = google_data
+                if enhanced_data:
+                    # Merge the enhanced data with Google Shopping data
+                    final_data = smart_merge_product_data(google_data, enhanced_data)
+                    print(f"✅ Enhanced data with deep scraping")
         
         return ScrapeResponse(
             url=request.url,
             success=True,
             product_data=final_data,
-            raw_content=google_content[:1000] if google_content else "Extracted via fallback methods"
+            raw_content=content[:1000]
         )
         
     except Exception as e:
+        print(f"❌ Smart scraping error: {str(e)}")
         return ScrapeResponse(
             url=request.url,
             success=False,
@@ -1144,8 +1150,6 @@ def merge_google_and_ecommerce_data(google_data: ProductData, ecommerce_data: Pr
         
         if google_data.average_rating and not final_data.average_rating:
             final_data.average_rating = google_data.average_rating
-        
-        if google_data.total_reviews and not final_data.total_reviews:
             final_data.total_reviews = google_data.total_reviews
         
         # Always use Google Shopping buying options (more comprehensive)
@@ -1165,24 +1169,26 @@ def merge_google_and_ecommerce_data(google_data: ProductData, ecommerce_data: Pr
 @app.get("/")
 async def root():
     return {
-        "message": "Snuffl Crawl4AI Server (Railway) - Smart Two-Step Scraping",
+        "message": "🧠 Snuffl Crawl4AI Server (Railway) - SMART COMPREHENSIVE SCRAPING",
         "platform": "Railway",
         "endpoints": {
             "/health": "Health check",
             "/scrape": "Scrape single product page (basic)",
-            "/scrape-google-shopping": "🧠 Smart two-step scraping: Google Shopping + E-commerce sites",
-            "/scrape-google-simple": "Simple Google Shopping scraping (fallback)",
+            "/scrape-google-shopping": "🧠 SMART COMPREHENSIVE: Google Shopping + Auto E-commerce Detection + Deep Scraping",
+            "/scrape-google-simple": "Simple Google Shopping scraping (reliable fallback)",
             "/bulk-scrape": "Scrape multiple product pages",
             "/docs": "API documentation"
         },
-        "features": [
-            "🧠 Smart two-step scraping strategy",
-            "🛒 Light Google Shopping scraping (avoids blocking)",
-            "🏪 Deep e-commerce site scraping (Amazon, Flipkart, etc.)",
-            "🔄 Intelligent data merging from multiple sources",
-            "📊 Comprehensive product data with 20+ fields",
-            "⚡ Optimized for speed and reliability"
-        ]
+        "smart_features": [
+            "🔍 Intelligent Google Shopping extraction (same reliability as simple endpoint)",
+            "� Auto-detection of e-commerce product URLs from buying options",
+            "🛒 Smart deep scraping of actual product pages (Amazon, Flipkart, etc.)",
+            "🧠 Regex + LLM hybrid extraction for maximum reliability",
+            "� Automatic fallback from comprehensive to simple extraction",
+            "📊 Smart data merging from multiple sources",
+            "⚡ Optimized for speed and accuracy"
+        ],
+        "extraction_strategy": "Regex patterns + LLM extraction + Smart fallbacks"
     }
 
 if __name__ == "__main__":
