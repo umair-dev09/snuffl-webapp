@@ -192,17 +192,29 @@ async def scrape_multiple_pages(request: BulkScrapeRequest):
 async def scrape_google_shopping_comprehensive(request: ScrapeRequest):
     """Scrape Google Shopping page comprehensively by checking multiple page variants"""
     try:
-        # Configure browser settings for maximum speed
+        # Configure browser settings with proper headers to bypass Google restrictions
         browser_config = BrowserConfig(
             browser_type="chromium",
             headless=True,
-            verbose=False
+            verbose=False,
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Cache-Control": "max-age=0"
+            }
         )
         
         # Configure crawl settings for comprehensive data extraction
         crawl_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            word_count_threshold=10,  # Increased for more content
+            word_count_threshold=20,  # Increased for more content
             remove_overlay_elements=True,
             wait_for_images=True,     # Enable image waiting for better extraction
             process_iframes=False
@@ -226,7 +238,14 @@ async def scrape_google_shopping_comprehensive(request: ScrapeRequest):
                     f"{base_part}/reviews{gl_part}"
                 ])
         
-        # Scrape all URLs
+        # Update crawl config without JavaScript (not supported in v0.6.3)
+        crawl_config = CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            word_count_threshold=20,  # Increased for more content
+            remove_overlay_elements=True,
+            wait_for_images=True,     # Enable image waiting for better extraction
+            process_iframes=False
+        )
         async with AsyncWebCrawler(config=browser_config) as crawler:
             results = await crawler.arun_many(urls=urls_to_scrape, config=crawl_config)
         
@@ -263,6 +282,66 @@ async def scrape_google_shopping_comprehensive(request: ScrapeRequest):
             error=str(e)
         )
 
+@app.post("/scrape-google-simple", response_model=ScrapeResponse)
+async def scrape_google_shopping_simple(request: ScrapeRequest):
+    """Simple Google Shopping scraper with minimal extraction - fallback option"""
+    try:
+        # Simple browser config
+        browser_config = BrowserConfig(
+            browser_type="chromium",
+            headless=True,
+            verbose=False,
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        )
+        
+        # Simple crawl config
+        crawl_config = CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            word_count_threshold=50,
+            remove_overlay_elements=True,
+            wait_for_images=False,
+            process_iframes=False
+        )
+        
+        # Simple single URL scrape
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            result = await crawler.arun(url=request.url, config=crawl_config)
+        
+        if not result.success:
+            return ScrapeResponse(
+                url=request.url,
+                success=False,
+                error=result.error_message or "Failed to crawl the page"
+            )
+        
+        # Check if we got meaningful content (not just login/consent page)
+        content = result.markdown or ""
+        if len(content) < 500 or "Sign in" in content or "Choose what you're giving feedback on" in content:
+            return ScrapeResponse(
+                url=request.url,
+                success=False,
+                error="Google is showing login/consent page instead of product content",
+                raw_content=content[:500]
+            )
+        
+        product_data = None
+        if request.extract_structured_data:
+            product_data = await extract_simple_product_data(content)
+        
+        return ScrapeResponse(
+            url=request.url,
+            success=True,
+            product_data=product_data,
+            raw_content=content[:1500]
+        )
+        
+    except Exception as e:
+        return ScrapeResponse(
+            url=request.url,
+            success=False,
+            error=str(e)
+        )
+
 async def extract_product_data_with_groq(content: str) -> ProductData:
     """Extract structured product data using Groq's Llama model - Optimized for Google Shopping pages"""
     try:
@@ -270,89 +349,36 @@ async def extract_product_data_with_groq(content: str) -> ProductData:
         truncated_content = content[:4000]  # Increased from 2000 for more data
         
         prompt = f"""
-        You are a GOOGLE SHOPPING page parser. Extract ALL product information from this Google Shopping page into the exact JSON format below.
-
-        IMPORTANT: Return ONLY valid JSON, no extra text or explanations.
-
-        GOOGLE SHOPPING PAGE STRUCTURE GUIDE:
-        - Product title: Usually in h1 or main heading
-        - Brand: Often separate from title or in title
-        - Price: Look for currency symbols (₹, $) and numbers
-        - Price range: If shows range like "₹2,000–₹2,599"
-        - Images: CRITICAL - Extract ALL image URLs including:
-          * Main product image (usually largest)
-          * Carousel images in sh-div__image div
-          * Thumbnail images
-          * Color variant images
-          * Google Shopping encrypted image URLs (like encrypted-tbn1.gstatic.com/shopping?q=tbn:...)
-          * Any src, data-src, or background-image URLs
-        - Description: Main product description paragraphs
-        - Features: Bullet points about product features
-        - Colors: Color variants with names and images
-        - Sizes: Size options for fashion/wearable items
-        - Specifications: Technical specs like battery, dimensions, etc.
-        - Buying options: Different sellers with prices and delivery info
-        - Reviews: Rating, review count, review tags, sample reviews
-        - Availability: Stock status and delivery information
-
-        REQUIRED JSON FORMAT:
+        Extract product information from this Google Shopping page content and return as JSON.
+        
+        IMPORTANT: Return ONLY valid JSON, no explanations or extra text.
+        
+        Look for and extract:
+        - Product title/name
+        - Brand name
+        - Price (convert to number, remove currency symbols)
+        - Product images (all URLs you can find)
+        - Product description
+        - Key features
+        - Seller information
+        - Ratings and reviews
+        - Specifications
+        
+        Return in this exact JSON format:
         {{
-            "title": "full product title",
-            "brand": "brand name",
-            "price": numeric_price_value,
-            "price_range": "price range if shown",
-            "image_urls": ["image1.jpg", "image2.jpg"],
-            "description": "main product description",
+            "title": "product name",
+            "brand": "brand name", 
+            "price": numeric_price,
+            "image_urls": ["url1", "url2"],
+            "description": "product description",
             "features": ["feature1", "feature2"],
-            "colors_available": [
-                {{"color_name": "color", "color_image_url": "image_url"}}
-            ],
-            "sizes_available": ["size1", "size2"],
-            "specifications": {{
-                "battery": "value",
-                "form_factor": "value",
-                "dimensions": "value"
-            }},
-            "weight": "weight if mentioned",
-            "dimensions": "dimensions if available",
-            "availability_text": "delivery/stock text",
-            "buying_options": [
-                {{
-                    "seller_name": "seller name",
-                    "price": numeric_price,
-                    "delivery_info": "delivery text",
-                    "offers": "offer text",
-                    "site_url": "visit site url"
-                }}
-            ],
             "average_rating": numeric_rating,
             "total_reviews": numeric_count,
-            "review_tags": ["tag1", "tag2"],
-            "sample_reviews": [
-                {{
-                    "rating": numeric_rating,
-                    "review_text": "review text",
-                    "source": "source site"
-                }}
-            ]
+            "specifications": {{"key": "value"}},
+            "buying_options": [{{"seller_name": "seller", "price": numeric_price}}]
         }}
-
-        EXTRACTION RULES:
-        1. Extract ALL available data, use null for missing fields
-        2. Convert all prices to numbers (remove currency symbols)
-        3. Extract ALL image URLs from carousels and thumbnails INCLUDING:
-           - Main product images
-           - Carousel/thumbnail images in sh-div__image divs
-           - Color variant images
-           - Google Shopping encrypted URLs (encrypted-tbn1.gstatic.com/shopping?q=tbn:...)
-           - Any image URLs in src, data-src, or style attributes
-        4. Get ALL buying options with seller details
-        5. Extract ALL product features as separate array items
-        6. Parse specifications into structured object
-        7. Get sample reviews with ratings and sources
-        8. Use exact field names as specified above
-
-        GOOGLE SHOPPING PAGE CONTENT:
+        
+        Use null for missing data. Content:
         {truncated_content}
         """
 
@@ -515,6 +541,61 @@ async def extract_comprehensive_product_data_with_groq(content: str) -> ProductD
         print(f"Error extracting comprehensive product data: {e}")
         return ProductData()
 
+async def extract_simple_product_data(content: str) -> ProductData:
+    """Simple extraction with minimal prompt to avoid LLM issues"""
+    try:
+        # Keep content short for simple extraction
+        truncated_content = content[:3000]
+        
+        prompt = f"""
+        Extract basic product info from this page and return as JSON only.
+        
+        Find: title, brand, price, images, description, rating
+        
+        JSON format:
+        {{
+            "title": "product name",
+            "brand": "brand",
+            "price": number,
+            "image_urls": ["url1"],
+            "description": "description",
+            "average_rating": number,
+            "total_reviews": number
+        }}
+        
+        Use null for missing data.
+        
+        Content: {truncated_content}
+        """
+
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=800,
+            temperature=0,
+            top_p=0.1
+        )
+        
+        extracted_text = response.choices[0].message.content.strip()
+        
+        # Try to find JSON in the response
+        start_idx = extracted_text.find('{')
+        end_idx = extracted_text.rfind('}') + 1
+        
+        if start_idx != -1 and end_idx != -1:
+            json_str = extracted_text[start_idx:end_idx]
+            try:
+                product_dict = json.loads(json_str)
+                return ProductData(**product_dict)
+            except:
+                return ProductData()
+        
+        return ProductData()
+            
+    except Exception as e:
+        print(f"Error in simple extraction: {e}")
+        return ProductData()
+
 @app.get("/")
 async def root():
     return {
@@ -524,14 +605,17 @@ async def root():
             "/health": "Health check",
             "/scrape": "Scrape single product page (basic)",
             "/scrape-google-shopping": "Comprehensive Google Shopping page scraping",
+            "/scrape-google-simple": "Simple Google Shopping scraping (fallback)",
             "/bulk-scrape": "Scrape multiple product pages",
             "/docs": "API documentation"
         },
         "features": [
             "Comprehensive Google Shopping data extraction",
             "Multi-section scraping (main, offers, specs, reviews)",
+            "Simple fallback scraping for blocked pages",
             "Enhanced product data model with 20+ fields",
-            "Optimized for speed and accuracy"
+            "Optimized for speed and accuracy",
+            "Proper User-Agent and headers for Google bypass"
         ]
     }
 
