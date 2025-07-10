@@ -190,74 +190,72 @@ async def scrape_multiple_pages(request: BulkScrapeRequest):
 
 @app.post("/scrape-google-shopping", response_model=ScrapeResponse)
 async def scrape_google_shopping_comprehensive(request: ScrapeRequest):
-    """Scrape Google Shopping page comprehensively from single page - optimized"""
+    """Smart two-step scraping: Google Shopping for basic info + buying options, then deep scrape e-commerce sites"""
     try:
-        # Configure browser settings with proper headers to bypass Google restrictions
+        # Step 1: Light scraping of Google Shopping page
+        print(f"🔍 Step 1: Light scraping Google Shopping page: {request.url}")
+        
+        # Simple browser config for Google Shopping (less aggressive)
         browser_config = BrowserConfig(
             browser_type="chromium",
             headless=True,
             verbose=False,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Cache-Control": "max-age=0"
-            }
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         
-        # Configure crawl settings for comprehensive data extraction from single page
+        # Light crawl config for Google Shopping
         crawl_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            word_count_threshold=30,  # Increased for more content
+            word_count_threshold=20,
             remove_overlay_elements=True,
-            wait_for_images=True,     # Enable image waiting for better extraction
+            wait_for_images=False,  # Don't wait for images to avoid blocking
             process_iframes=False
         )
         
-        # Scrape single main URL only (no multiple URLs for speed)
+        # Scrape Google Shopping page lightly
         async with AsyncWebCrawler(config=browser_config) as crawler:
-            result = await crawler.arun(url=request.url, config=crawl_config)
+            google_result = await crawler.arun(url=request.url, config=crawl_config)
         
-        if not result.success:
+        if not google_result.success:
             return ScrapeResponse(
                 url=request.url,
                 success=False,
-                error=result.error_message or "Failed to crawl the page"
+                error=f"Failed to scrape Google Shopping page: {google_result.error_message}"
             )
         
-        # Check if we got meaningful content (not just login/consent page)
-        content = result.markdown or ""
-        if len(content) < 800 or "Sign in" in content or "Choose what you're giving feedback on" in content:
+        # Check if Google is blocking us
+        google_content = google_result.markdown or ""
+        if len(google_content) < 500 or "Sign in" in google_content or "Choose what you're giving feedback on" in google_content:
             return ScrapeResponse(
                 url=request.url,
                 success=False,
                 error="Google is showing login/consent page instead of product content",
-                raw_content=content[:500]
+                raw_content=google_content[:500]
             )
         
-        product_data = None
-        if request.extract_structured_data:
-            # Use optimized Groq extraction for comprehensive data from single page
-            product_data = await extract_optimized_product_data_with_groq(content)
+        # Step 2: Extract basic info + buying options from Google Shopping
+        print(f"📊 Step 2: Extracting basic info and buying options from Google Shopping")
+        google_data = await extract_google_shopping_basic_data(google_content)
+        
+        # Step 3: Smart deep scraping of e-commerce sites
+        print(f"🛒 Step 3: Deep scraping top e-commerce sites")
+        comprehensive_data = await smart_deep_scrape_ecommerce_sites(google_data, google_content)
+        
+        # Step 4: Merge Google Shopping data with comprehensive e-commerce data
+        final_data = merge_google_and_ecommerce_data(google_data, comprehensive_data)
         
         return ScrapeResponse(
             url=request.url,
             success=True,
-            product_data=product_data,
-            raw_content=content[:1500] if content else None
+            product_data=final_data,
+            raw_content=google_content[:1000]  # Keep Google Shopping content for reference
         )
         
     except Exception as e:
         return ScrapeResponse(
             url=request.url,
             success=False,
-            error=str(e)
+            error=f"Smart scraping failed: {str(e)}"
         )
 
 @app.post("/scrape-google-simple", response_model=ScrapeResponse)
@@ -673,26 +671,397 @@ async def extract_optimized_product_data_with_groq(content: str) -> ProductData:
         # Fallback to simple extraction
         return await extract_simple_product_data(content)
 
+async def extract_google_shopping_basic_data(content: str) -> ProductData:
+    """Extract basic product info and buying options from Google Shopping page (light scraping)"""
+    try:
+        # Keep content short for light extraction
+        truncated_content = content[:3000]
+        
+        prompt = f"""
+        Extract basic product information and buying options from this Google Shopping page.
+        
+        IMPORTANT: Return ONLY valid JSON, no extra text.
+        
+        Focus on extracting:
+        1. Basic product info (title, brand, price)
+        2. BUYING OPTIONS - Find all "Visit site" links with seller names and prices
+        3. Basic ratings and availability
+        
+        Return in this JSON format:
+        {{
+            "title": "product title",
+            "brand": "brand name",
+            "price": numeric_price,
+            "image_urls": ["main_image_url"],
+            "average_rating": numeric_rating,
+            "total_reviews": numeric_count,
+            "availability_text": "delivery/stock info",
+            "buying_options": [
+                {{
+                    "seller_name": "Amazon/Flipkart/Myntra/Croma/etc",
+                    "price": numeric_price,
+                    "delivery_info": "delivery text",
+                    "offers": "offer text",
+                    "site_url": "actual_ecommerce_site_url"
+                }}
+            ]
+        }}
+        
+        CRITICAL: Extract ALL buying options with their actual e-commerce site URLs.
+        Use null for missing data.
+        
+        Content: {truncated_content}
+        """
+
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000,
+            temperature=0,
+            top_p=0.1
+        )
+        
+        extracted_text = response.choices[0].message.content.strip()
+        
+        # Try to find JSON in the response
+        start_idx = extracted_text.find('{')
+        end_idx = extracted_text.rfind('}') + 1
+        
+        if start_idx != -1 and end_idx != -1:
+            json_str = extracted_text[start_idx:end_idx]
+            try:
+                product_dict = json.loads(json_str)
+                return ProductData(**product_dict)
+            except:
+                return ProductData()
+        
+        return ProductData()
+            
+    except Exception as e:
+        print(f"Error extracting Google Shopping basic data: {e}")
+        return ProductData()
+
+async def smart_deep_scrape_ecommerce_sites(google_data: ProductData, google_content: str) -> ProductData:
+    """Smart deep scraping of e-commerce sites from Google Shopping buying options"""
+    try:
+        # Get buying options from Google Shopping data
+        buying_options = google_data.buying_options or []
+        
+        if not buying_options:
+            print("⚠️  No buying options found in Google Shopping data")
+            return ProductData()
+        
+        # Prioritize e-commerce sites (Amazon, Flipkart, Myntra, etc.)
+        prioritized_sites = []
+        for option in buying_options:
+            if option.site_url and option.seller_name:
+                # Check if it's a known e-commerce site
+                seller_lower = option.seller_name.lower()
+                if any(site in seller_lower for site in ['amazon', 'flipkart', 'myntra', 'croma', 'ajio', 'nykaa', 'tata', 'reliance']):
+                    prioritized_sites.append(option)
+        
+        # If no prioritized sites, use top 2 buying options
+        if not prioritized_sites:
+            prioritized_sites = buying_options[:2]
+        
+        print(f"🎯 Found {len(prioritized_sites)} prioritized e-commerce sites to scrape")
+        
+        # Deep scrape top 2 e-commerce sites
+        ecommerce_results = []
+        for i, option in enumerate(prioritized_sites[:2]):  # Limit to top 2 for speed
+            if option.site_url:
+                print(f"🛒 Deep scraping {option.seller_name}: {option.site_url}")
+                ecommerce_data = await deep_scrape_ecommerce_site(option.site_url, option.seller_name)
+                if ecommerce_data:
+                    ecommerce_results.append(ecommerce_data)
+        
+        # Combine results from multiple e-commerce sites
+        if ecommerce_results:
+            return combine_ecommerce_data(ecommerce_results)
+        
+        return ProductData()
+        
+    except Exception as e:
+        print(f"Error in smart deep scraping: {e}")
+        return ProductData()
+
+async def deep_scrape_ecommerce_site(url: str, seller_name: str) -> ProductData:
+    """Deep scrape individual e-commerce site for comprehensive product data"""
+    try:
+        # Configure browser for e-commerce sites
+        browser_config = BrowserConfig(
+            browser_type="chromium",
+            headless=True,
+            verbose=False,
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        
+        # Comprehensive crawl config for e-commerce sites
+        crawl_config = CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            word_count_threshold=50,  # More content for comprehensive extraction
+            remove_overlay_elements=True,
+            wait_for_images=True,     # Wait for images on e-commerce sites
+            process_iframes=False
+        )
+        
+        # Scrape the e-commerce site
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            result = await crawler.arun(url=url, config=crawl_config)
+        
+        if not result.success:
+            print(f"❌ Failed to scrape {seller_name}: {result.error_message}")
+            return ProductData()
+        
+        content = result.markdown or ""
+        if len(content) < 800:
+            print(f"⚠️  {seller_name} returned minimal content")
+            return ProductData()
+        
+        # Extract comprehensive data using site-specific extraction
+        return await extract_ecommerce_comprehensive_data(content, seller_name)
+        
+    except Exception as e:
+        print(f"Error deep scraping {seller_name}: {e}")
+        return ProductData()
+
+async def extract_ecommerce_comprehensive_data(content: str, seller_name: str) -> ProductData:
+    """Extract comprehensive product data from e-commerce site with site-specific optimizations"""
+    try:
+        # Truncate content for comprehensive extraction
+        truncated_content = content[:6000]
+        
+        # Site-specific extraction hints
+        site_hints = {
+            'amazon': 'Amazon page structure: Look for #productTitle, .a-price, .cr-original-review-text, .feature, .a-carousel',
+            'flipkart': 'Flipkart page structure: Look for ._35KyD6, ._1fMrqx, .row, ._3ntsZ8, .col-4-12',
+            'myntra': 'Myntra page structure: Look for .pdp-name, .pdp-price, .index-productDescriptors, .user-review',
+            'croma': 'Croma page structure: Look for .pdp-product-name, .pdp-price, .product-info, .review-item',
+            'ajio': 'AJIO page structure: Look for .prod-name, .prod-sp, .prod-desc, .review-con',
+            'nykaa': 'Nykaa page structure: Look for .product-title, .post-card, .ProductDetailsPage'
+        }
+        
+        site_hint = ""
+        for site, hint in site_hints.items():
+            if site in seller_name.lower():
+                site_hint = hint
+                break
+        
+        prompt = f"""
+        Extract comprehensive product information from this {seller_name} e-commerce page.
+        
+        IMPORTANT: Return ONLY valid JSON, no extra text.
+        
+        {site_hint}
+        
+        Extract ALL available information:
+        - Complete product title and brand
+        - All prices (current, original, discounted)
+        - ALL product images (main, gallery, color variants)
+        - Complete product description and features
+        - All color and size variants
+        - Detailed specifications
+        - All reviews and ratings
+        - Stock availability and delivery info
+        
+        Return in this exact JSON format:
+        {{
+            "title": "complete product title",
+            "brand": "brand name",
+            "price": current_price_number,
+            "price_range": "price range if multiple variants",
+            "image_urls": ["main_image", "gallery_image1", "gallery_image2"],
+            "description": "detailed product description",
+            "features": ["feature1", "feature2", "feature3"],
+            "colors_available": [
+                {{"color_name": "color", "color_image_url": "image_url"}}
+            ],
+            "sizes_available": ["size1", "size2"],
+            "specifications": {{
+                "brand": "brand",
+                "model": "model",
+                "material": "material",
+                "dimensions": "dimensions",
+                "weight": "weight",
+                "color": "color",
+                "battery": "battery_info",
+                "connectivity": "connectivity",
+                "compatibility": "compatibility"
+            }},
+            "weight": "weight",
+            "dimensions": "dimensions",
+            "availability_text": "stock and delivery info",
+            "average_rating": numeric_rating,
+            "total_reviews": numeric_count,
+            "review_tags": ["tag1", "tag2", "tag3"],
+            "sample_reviews": [
+                {{
+                    "rating": numeric_rating,
+                    "review_text": "actual review text",
+                    "source": "{seller_name}"
+                }}
+            ]
+        }}
+        
+        EXTRACTION RULES:
+        1. Extract ALL available data, use null for missing fields
+        2. Convert all prices to numbers (remove currency symbols)
+        3. Extract ALL image URLs including gallery and variant images
+        4. Get ALL product features and specifications
+        5. Extract sample reviews with ratings
+        6. Use exact field names as specified above
+        
+        Content: {truncated_content}
+        """
+
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2500,
+            temperature=0,
+            top_p=0.1
+        )
+        
+        extracted_text = response.choices[0].message.content.strip()
+        
+        # Try to find JSON in the response
+        start_idx = extracted_text.find('{')
+        end_idx = extracted_text.rfind('}') + 1
+        
+        if start_idx != -1 and end_idx != -1:
+            json_str = extracted_text[start_idx:end_idx]
+            try:
+                product_dict = json.loads(json_str)
+                return ProductData(**product_dict)
+            except json.JSONDecodeError as e:
+                print(f"JSON parsing error for {seller_name}: {e}")
+                return ProductData()
+        
+        return ProductData()
+            
+    except Exception as e:
+        print(f"Error extracting comprehensive data from {seller_name}: {e}")
+        return ProductData()
+
+def combine_ecommerce_data(ecommerce_results: List[ProductData]) -> ProductData:
+    """Combine data from multiple e-commerce sites into best comprehensive result"""
+    try:
+        if not ecommerce_results:
+            return ProductData()
+        
+        # Start with the first result as base
+        combined = ecommerce_results[0]
+        
+        # Merge data from other results
+        for result in ecommerce_results[1:]:
+            # Use the most complete title
+            if result.title and (not combined.title or len(result.title) > len(combined.title)):
+                combined.title = result.title
+            
+            # Use the most complete brand
+            if result.brand and not combined.brand:
+                combined.brand = result.brand
+            
+            # Use lowest price
+            if result.price and (not combined.price or result.price < combined.price):
+                combined.price = result.price
+            
+            # Combine image URLs
+            if result.image_urls:
+                combined_images = list(combined.image_urls) if combined.image_urls else []
+                for img in result.image_urls:
+                    if img not in combined_images:
+                        combined_images.append(img)
+                combined.image_urls = combined_images
+            
+            # Use the most complete description
+            if result.description and (not combined.description or len(result.description) > len(combined.description)):
+                combined.description = result.description
+            
+            # Combine features
+            if result.features:
+                combined_features = list(combined.features) if combined.features else []
+                for feature in result.features:
+                    if feature not in combined_features:
+                        combined_features.append(feature)
+                combined.features = combined_features
+            
+            # Combine specifications
+            if result.specifications:
+                combined_specs = dict(combined.specifications) if combined.specifications else {}
+                combined_specs.update(result.specifications)
+                combined.specifications = combined_specs
+            
+            # Use highest rating
+            if result.average_rating and (not combined.average_rating or result.average_rating > combined.average_rating):
+                combined.average_rating = result.average_rating
+            
+            # Use highest review count
+            if result.total_reviews and (not combined.total_reviews or result.total_reviews > combined.total_reviews):
+                combined.total_reviews = result.total_reviews
+        
+        return combined
+        
+    except Exception as e:
+        print(f"Error combining e-commerce data: {e}")
+        return ecommerce_results[0] if ecommerce_results else ProductData()
+
+def merge_google_and_ecommerce_data(google_data: ProductData, ecommerce_data: ProductData) -> ProductData:
+    """Merge Google Shopping basic data with comprehensive e-commerce data"""
+    try:
+        # Start with e-commerce data as base (more comprehensive)
+        final_data = ecommerce_data
+        
+        # Fill in missing data from Google Shopping
+        if google_data.title and not final_data.title:
+            final_data.title = google_data.title
+        
+        if google_data.brand and not final_data.brand:
+            final_data.brand = google_data.brand
+        
+        if google_data.price and not final_data.price:
+            final_data.price = google_data.price
+        
+        if google_data.average_rating and not final_data.average_rating:
+            final_data.average_rating = google_data.average_rating
+        
+        if google_data.total_reviews and not final_data.total_reviews:
+            final_data.total_reviews = google_data.total_reviews
+        
+        # Always use Google Shopping buying options (more comprehensive)
+        if google_data.buying_options:
+            final_data.buying_options = google_data.buying_options
+        
+        # Use Google Shopping availability text if e-commerce doesn't have it
+        if google_data.availability_text and not final_data.availability_text:
+            final_data.availability_text = google_data.availability_text
+        
+        return final_data
+        
+    except Exception as e:
+        print(f"Error merging data: {e}")
+        return ecommerce_data if ecommerce_data else google_data
+
 @app.get("/")
 async def root():
     return {
-        "message": "Snuffl Crawl4AI Server (Railway) - Enhanced for Google Shopping",
+        "message": "Snuffl Crawl4AI Server (Railway) - Smart Two-Step Scraping",
         "platform": "Railway",
         "endpoints": {
             "/health": "Health check",
             "/scrape": "Scrape single product page (basic)",
-            "/scrape-google-shopping": "Optimized Google Shopping page scraping (single page, comprehensive)",
+            "/scrape-google-shopping": "🧠 Smart two-step scraping: Google Shopping + E-commerce sites",
             "/scrape-google-simple": "Simple Google Shopping scraping (fallback)",
             "/bulk-scrape": "Scrape multiple product pages",
             "/docs": "API documentation"
         },
         "features": [
-            "Optimized Google Shopping data extraction from single page",
-            "Comprehensive product data with smart fallbacks",
-            "Simple fallback scraping for blocked pages",
-            "Enhanced product data model with 20+ fields",
-            "Optimized for speed and reliability",
-            "Proper User-Agent and headers for Google bypass"
+            "🧠 Smart two-step scraping strategy",
+            "🛒 Light Google Shopping scraping (avoids blocking)",
+            "🏪 Deep e-commerce site scraping (Amazon, Flipkart, etc.)",
+            "🔄 Intelligent data merging from multiple sources",
+            "📊 Comprehensive product data with 20+ fields",
+            "⚡ Optimized for speed and reliability"
         ]
     }
 
