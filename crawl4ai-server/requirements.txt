@@ -1,8 +1,0 @@
-fastapi
-uvicorn[standard]
-crawl4ai==0.6.3
-groq
-python-dotenv
-pydantic
-httpx
-playwright
