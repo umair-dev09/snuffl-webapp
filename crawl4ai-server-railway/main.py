@@ -427,98 +427,77 @@ async def extract_product_data_with_groq(content: str) -> ProductData:
         return ProductData()
 
 async def extract_comprehensive_product_data_with_groq(content: str) -> ProductData:
-    """Extract comprehensive product data from multiple Google Shopping page sections"""
+    """Extract comprehensive product data from Google Shopping page - simplified version"""
     try:
-        # Keep more content for comprehensive extraction
-        truncated_content = content[:8000]  # Increased for multi-page content
+        # Keep reasonable content length
+        truncated_content = content[:5000]
         
         prompt = f"""
-        You are parsing MULTIPLE SECTIONS of a Google Shopping page (MAIN, OFFERS, SPECS, REVIEWS). 
-        Extract ALL available product information into the exact JSON format below.
-
-        RETURN ONLY VALID JSON, NO EXTRA TEXT.
-
-        GOOGLE SHOPPING SECTIONS EXPLAINED:
-        - MAIN PAGE: Product title, brand, main price, images (including encrypted Google Shopping URLs), description, features, colors, availability
-        - OFFERS PAGE: All buying options with different sellers, prices, delivery info, offers
-        - SPECS PAGE: Detailed technical specifications, dimensions, weight, features
-        - REVIEWS PAGE: Ratings, review count, review tags, sample reviews with sources
-
-        EXTRACTION INSTRUCTIONS:
-        1. MAIN PAGE: Extract title, brand, primary price, ALL image URLs from carousels and thumbnails
-        2. OFFERS PAGE: Extract ALL buying options with seller details
-        3. SPECS PAGE: Extract ALL specifications into structured object
-        4. REVIEWS PAGE: Extract rating, review count, tags, sample reviews
-        5. Combine all information into single comprehensive JSON
-
-        IMAGE EXTRACTION PRIORITY:
-        - Extract ALL Google Shopping encrypted image URLs (encrypted-tbn1.gstatic.com/shopping?q=tbn:...)
-        - Extract images from sh-div__image divs and carousels
-        - Extract color variant images
-        - Extract any src, data-src, or background-image URLs
-        - Include both main product images and thumbnail images
-
-        REQUIRED JSON FORMAT (use null for missing data):
+        Extract comprehensive product information from this Google Shopping page and return as JSON.
+        
+        IMPORTANT: Return ONLY valid JSON, no extra text.
+        
+        Extract ALL available information:
+        - Complete product title and brand
+        - All prices and price ranges
+        - ALL product images (including encrypted Google Shopping URLs)
+        - Complete description and features
+        - Color and size variants
+        - Specifications
+        - Buying options with seller details
+        - Ratings and reviews
+        - Availability and delivery info
+        
+        Return in this exact JSON format:
         {{
             "title": "complete product title",
             "brand": "brand name",
-            "price": lowest_price_as_number,
-            "price_range": "price range if shown (e.g., ₹2,000–₹2,599)",
-            "image_urls": ["all_product_images_from_carousel"],
-            "description": "main product description",
-            "features": ["feature1", "feature2", "feature3"],
+            "price": lowest_price_number,
+            "price_range": "price range if shown",
+            "image_urls": ["all_product_images"],
+            "description": "product description",
+            "features": ["feature1", "feature2"],
             "colors_available": [
                 {{"color_name": "color", "color_image_url": "image_url"}}
             ],
             "sizes_available": ["size1", "size2"],
             "specifications": {{
-                "battery": "value",
-                "form_factor": "value",
+                "material": "value",
                 "dimensions": "value",
                 "weight": "value",
-                "connectivity": "value",
-                "compatibility": "value"
+                "features": "value"
             }},
-            "weight": "weight if mentioned separately",
-            "dimensions": "dimensions if mentioned separately",
-            "availability_text": "delivery/stock status text",
+            "availability_text": "delivery/stock info",
             "buying_options": [
                 {{
-                    "seller_name": "Amazon/Flipkart/Croma/etc",
+                    "seller_name": "seller name",
                     "price": numeric_price,
                     "delivery_info": "delivery text",
-                    "offers": "offer/discount text",
-                    "site_url": "visit site url"
+                    "offers": "offer text",
+                    "site_url": "actual_site_url"
                 }}
             ],
             "average_rating": numeric_rating,
             "total_reviews": numeric_count,
-            "review_tags": ["Good sound", "Comfortable", "Bass"],
+            "review_tags": ["tag1", "tag2"],
             "sample_reviews": [
                 {{
                     "rating": numeric_rating,
-                    "review_text": "actual review text",
-                    "source": "Amazon/Flipkart/etc"
+                    "review_text": "review text",
+                    "source": "source"
                 }}
             ]
         }}
-
-        CRITICAL EXTRACTION RULES:
-        1. Extract ALL image URLs from image carousels and thumbnails INCLUDING:
-           - Main product images
-           - Google Shopping encrypted URLs (encrypted-tbn1.gstatic.com/shopping?q=tbn:...)
-           - Images in sh-div__image divs
-           - Color variant images
-           - Any image URLs in src, data-src, or style attributes
-        2. Get ALL buying options from OFFERS section
-        3. Parse ALL specifications from SPECS section
-        4. Extract sample reviews with ratings and sources from REVIEWS section
-        5. Convert all prices to numbers (remove currency symbols)
+        
+        EXTRACTION RULES:
+        1. Extract ALL available data, use null for missing fields
+        2. Convert prices to numbers (remove currency symbols)
+        3. Extract ALL image URLs including encrypted ones
+        4. Get ALL buying options with actual site URLs
+        5. Extract specifications into structured object
         6. Use exact field names as specified above
-        7. Return null for truly missing data, not empty strings
-
-        COMBINED GOOGLE SHOPPING PAGE CONTENT:
-        {truncated_content}
+        
+        Content: {truncated_content}
         """
 
         response = client.chat.completions.create(
